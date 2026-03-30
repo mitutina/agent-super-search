@@ -26,7 +26,7 @@ Code đã tự resolve mọi path tương đối từ thư mục chứa worker:
 - `storage_state`
 
 Nghĩa là:
-- cứ giữ `manager.py`, `worker_common.py`, `search_*.py` trong cùng một folder
+- cứ giữ `manager.py`, `fix-error.py`, `search_*.py` trong cùng một folder
 - khi copy cả folder sang máy mới, path tự đúng theo folder mới
 - profile luôn nằm trong `./profiles` cạnh các worker
 
@@ -168,25 +168,25 @@ Khi máy mới chưa có `profiles/` hoặc session cũ:
 Windows:
 
 ```bash
-python manager.py --setup 1
+python fix-error.py all
 ```
 
 Linux:
 
 ```bash
-python3 manager.py --setup 1
+python3 fix-error.py all
 ```
 
 Quy trình setup:
-1. Manager mở cả 4 worker cùng lúc
-2. Mỗi worker mở browser visible và vào thẳng đúng website tương ứng
+1. `fix-error.py all` mở Chrome thật cho cả 4 profile cùng lúc
+2. Mỗi cửa sổ vào thẳng đúng website tương ứng
 3. Agent hoặc user đăng nhập vào từng dịch vụ trong đúng cửa sổ đó
 4. Nếu có captcha, xử lý ngay trong browser tương ứng
 5. Nếu có popup che ô chat, đóng nó
 6. Không cần nhấn `Enter` trong terminal
-7. Script không tự đóng browser ở chế độ setup
-8. Đăng nhập xong ở cửa sổ nào thì chờ 2-3 giây rồi tự đóng cửa sổ đó
-9. Khi cả 4 cửa sổ đã đóng hết, setup hoàn tất
+7. Lệnh chỉ mở browser rồi kết thúc ngay
+8. Script không tự đóng browser ở chế độ login/fix
+9. Đăng nhập xong ở cửa sổ nào thì tự đóng cửa sổ đó
 
 Sau setup, nên kiểm tra:
 - `profiles/chatgpt`
@@ -227,12 +227,12 @@ python3 manager.py "test" 0
 
 ## Sửa Lỗi Login hoặc Captcha Sau Này
 
-Không phải lúc nào cũng cần chạy lại toàn bộ `manager.py --setup 1`.
+Không phải lúc nào cũng cần mở lại cả 4 profile bằng `fix-error.py all`.
 
 Nếu chỉ một worker bị lỗi:
 - mở đúng profile của worker đó
 - để user sửa tay
-- `fix-error.py` chỉ mở đúng browser/profile rồi tự kết thúc lệnh
+- `fix-error.py` chỉ mở Chrome thật với đúng browser/profile rồi tự kết thúc lệnh
 - browser sẽ giữ mở để user tự sửa tay
 - khi sửa xong, user tự đóng browser
 - chạy lại manager
@@ -259,23 +259,11 @@ python3 fix-error.py qwen
 python3 fix-error.py all
 ```
 
-Nếu muốn menu 5 lựa chọn:
-
-```bash
-python fix-error.py
-python3 fix-error.py
-```
-
-Các lựa chọn trong menu:
-1. Mở ChatGPT
-2. Mở Gemini
-3. Mở DeepSeek
-4. Mở Qwen
-5. Mở tất cả
+Không còn menu.
 
 Lưu ý:
 - lệnh mở trực tiếp như `python fix-error.py chatgpt` không cần nhập thêm trong terminal
-- `fix-error.py` chỉ là launcher, mở browser/profile xong là lệnh kết thúc ngay
+- `fix-error.py` chỉ là launcher, mở Chrome thật với đúng profile xong là lệnh kết thúc ngay
 - browser vẫn giữ mở cho tới khi user tự đóng cửa sổ đó
 - setup lần đầu và fix lỗi đều không dùng bước nhấn `Enter`
 
@@ -295,7 +283,7 @@ Nếu máy mới:
 2. check Python
 3. check Chrome/Chromium
 4. cài dependency
-5. chạy `manager.py --setup 1`
+5. chạy `fix-error.py all`
 6. đăng nhập từng profile
 7. chạy smoke test
 8. sau đó mới dùng skill bình thường
