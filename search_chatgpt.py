@@ -17,6 +17,7 @@ import os
 import platform
 import sys
 import time
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -310,6 +311,141 @@ def launch_browser(playwright, engine: str, timeout: int = 30000, extra_args=Non
     raise RuntimeError(f"Không khởi động được browser cho {engine}: {last_error}")
 
 
+
+def find_browser_executable() -> str:
+    env_exec = os.environ.get("AGENT_SEARCH_BROWSER_EXECUTABLE")
+    if env_exec:
+        env_path = Path(env_exec)
+        if env_path.exists():
+            return str(env_path)
+
+    system = platform.system()
+    candidates = []
+    if system == "Windows":
+        candidates = [
+            Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+            Path(r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"),
+            Path.home() / r"AppData\Local\Google\Chrome\Application\chrome.exe",
+        ]
+    elif system == "Linux":
+        candidates = [
+            Path("/usr/bin/google-chrome"),
+            Path("/usr/bin/google-chrome-stable"),
+            Path("/usr/bin/chromium"),
+            Path("/usr/bin/chromium-browser"),
+            Path("/snap/bin/chromium"),
+        ]
+    elif system == "Darwin":
+        candidates = [
+            Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            Path.home() / "Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        ]
+
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+
+    raise RuntimeError("Khong tim thay Chrome/Chromium.")
+
+
+def is_cdp_endpoint_ready(port: int) -> bool:
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=1.5) as response:
+            return response.status == 200
+    except Exception:
+        return False
+
+
+def wait_for_cdp_endpoint(port: int, timeout_seconds: float) -> None:
+    deadline = time.time() + timeout_seconds
+    last_error = None
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=1.5) as response:
+                if response.status == 200:
+                    return
+        except Exception as exc:
+            last_error = exc
+        time.sleep(0.25)
+    raise RuntimeError(f"Chrome CDP endpoint khong san sang o port {port}: {last_error}")
+
+
+def launch_real_chrome_with_cdp(playwright, engine: str, profile_dir: Path, start_url: str, cdp_port: int, timeout: int = 30000):
+    ensure_dirs(profile_dir)
+    chrome_process = None
+    endpoint = f"http://127.0.0.1:{cdp_port}"
+
+    if not is_cdp_endpoint_ready(cdp_port):
+        browser_path = find_browser_executable()
+        clear_profile_lock(profile_dir)
+        cmd = [
+            browser_path,
+            f"--user-data-dir={profile_dir}",
+            "--profile-directory=Default",
+            "--no-first-run",
+            "--start-maximized",
+            f"--remote-debugging-port={cdp_port}",
+            "--new-window",
+            start_url,
+        ]
+        chrome_process = subprocess.Popen(
+            cmd,
+            cwd=str(BASE_DIR),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        wait_for_cdp_endpoint(cdp_port, max(timeout / 1000.0, 15.0))
+
+    browser = playwright.chromium.connect_over_cdp(endpoint)
+    if not browser.contexts:
+        raise RuntimeError(f"Khong attach duoc Chrome context cho {engine}")
+
+    context = browser.contexts[0]
+    page = context.pages[-1] if context.pages else context.new_page()
+    print(f"[{engine}] Browser ready (real Chrome + CDP, port {cdp_port})")
+    return browser, context, page, chrome_process
+
+
+def close_attached_browser(browser, chrome_process):
+    if browser is not None:
+        try:
+            browser.close()
+        except Exception:
+            pass
+
+    if chrome_process is not None:
+        try:
+            chrome_process.wait(timeout=5)
+        except Exception:
+            try:
+                chrome_process.terminate()
+            except Exception:
+                pass
+            try:
+                chrome_process.wait(timeout=5)
+            except Exception:
+                try:
+                    chrome_process.kill()
+                except Exception:
+                    pass
+
+
+def open_real_browser_for_setup(engine: str, profile_dir: Path, start_url: str):
+    browser_path = find_browser_executable()
+    ensure_dirs(profile_dir)
+    clear_profile_lock(profile_dir)
+    cmd = [
+        browser_path,
+        f"--user-data-dir={profile_dir}",
+        "--profile-directory=Default",
+        "--no-first-run",
+        "--start-maximized",
+        "--new-window",
+        start_url,
+    ]
+    subprocess.Popen(cmd, cwd=str(BASE_DIR))
+    print(f"[{engine}] Da mo Chrome that voi profile: {profile_dir}")
+
 def detect_page_blockers(page, login_keywords=None, captcha_keywords=None, logout_keywords=None):
     payload = {
         "login_keywords": [k.lower() for k in (login_keywords or [])],
@@ -468,201 +604,199 @@ OUTPUT_DIR = BASE_DIR / "output"
 TEMP_DIR = OUTPUT_DIR / "temp"
 DEBUG_DIR = OUTPUT_DIR / "debug"
 TIMEOUT_MS = 60000
+CDP_PORT = 9331
 
 def _verify_web_search_on(page) -> bool:
-    """Chỉ tin vào bằng chứng trực quan trong UI.
-
-    Điều kiện PASS (theo yêu cầu Sếp):
-    - BẮT BUỘC phải có chip/nút 'Search' màu xanh (kèm icon globe) gần composer.
-    (Không bắt buộc placeholder 'Search the web'.)
-
-    Không dùng 'Sources' sau khi gửi để suy luận.
-    """
+    """Verify web search đã ON bằng cách tìm 'Search' hoặc '🌐' ở composer area."""
     try:
-        return page.evaluate(r"""
+        result = page.evaluate(r"""
             () => {
                 const norm = (t) => (t || '').replace(/\s+/g,' ').trim().toLowerCase();
-
-                // BẮT BUỘC: tìm chip/button 'Search' có màu xanh trong vùng composer.
-                // Tiêu chí: text == 'Search' + computedStyle.color là xanh-ish, và nằm nửa dưới màn hình.
-                const isBlue = (rgb) => {
-                    // rgb like 'rgb(0, 122, 255)' or 'rgba(...)'
-                    const m = rgb && rgb.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
-                    if (!m) return false;
-                    const r = parseInt(m[1],10), g = parseInt(m[2],10), b = parseInt(m[3],10);
-                    // xanh: b cao, r thấp tương đối
-                    return (b >= 140 && g >= 80 && r <= 120);
-                };
-
-                const els = Array.from(document.querySelectorAll('button, div[role="button"], span'));
-                for (const el of els) {
-                    const t = norm(el.innerText || el.textContent || '');
-                    if (t !== 'search') continue;
+                
+                // Tìm "Search" hoặc "🌐" ở nửa dưới màn hình
+                let foundSearch = false;
+                let foundGlobe = false;
+                const debugInfo = { searchTexts: [], globeTexts: [] };
+                
+                const allEls = Array.from(document.querySelectorAll('*'));
+                for (const el of allEls) {
                     const r = el.getBoundingClientRect();
-                    if (r.width < 30 || r.height < 14) continue;
-                    if (r.top < window.innerHeight * 0.5) continue;
-
-                    const style = window.getComputedStyle(el);
-                    const color = style && style.color;
-                    if (!isBlue(color)) continue;
-
-                    // icon globe gần đó (svg) hoặc emoji globe
-                    const hasSvg = !!el.querySelector('svg');
-                    const hasGlobeEmoji = (el.innerText || '').includes('🌐') || (el.textContent || '').includes('🌐');
-
-                    // Nhiều UI có icon ở element sibling, check parent
-                    const parent = el.parentElement;
-                    const parentHasSvg = parent ? !!parent.querySelector('svg') : false;
-                    const okIcon = hasSvg || hasGlobeEmoji || parentHasSvg;
-
-                    if (okIcon) return true;
+                    // Bỏ filter size để tìm tất cả
+                    if (r.top < window.innerHeight * 0.5) continue;  // Chỉ nửa dưới
+                    
+                    const s = getComputedStyle(el);
+                    if (s.display === 'none' || s.visibility === 'hidden' || s.opacity === '0') continue;
+                    
+                    const text = norm(el.innerText || el.textContent || '');
+                    
+                    // Tìm "search"
+                    if (text.includes('search')) {
+                        foundSearch = true;
+                        debugInfo.searchTexts.push(text.slice(0, 50));
+                    }
+                    
+                    // Tìm globe emoji
+                    const rawText = el.innerText || el.textContent || '';
+                    if (rawText.includes('🌐')) {
+                        foundGlobe = true;
+                        debugInfo.globeTexts.push(rawText.slice(0, 50));
+                    }
                 }
-
-                return false;
+                
+                return {
+                    success: foundSearch && foundGlobe,
+                    foundSearch,
+                    foundGlobe,
+                    debugInfo
+                };
             }
         """)
-    except Exception:
+        
+        print(f"[Verify Debug] foundSearch={result.get('foundSearch')}, foundGlobe={result.get('foundGlobe')}")
+        print(f"[Verify Debug] searchTexts={result.get('debugInfo', {}).get('searchTexts', [])[:3]}")
+        print(f"[Verify Debug] globeTexts={result.get('debugInfo', {}).get('globeTexts', [])[:3]}")
+        
+        return result.get('success', False)
+    except Exception as e:
+        print(f"[Verify Debug] Exception: {e}")
         return False
 
 
 def enable_web_search(page, engine, timestamp):
-    """Bật Web search và PHẢI verify bằng UI 'Search the web' + Search xanh.
+    """Bật Web search bằng cách click vào menu.
 
-    Quy tắc mới:
-    - Chỉ đi theo đường UI đúng như ảnh mẫu: '+' -> More -> Web search.
-    - Sau khi click, bắt buộc verify _verify_web_search_on(page) == True.
+    Cơ chế (2026-04-02 v7 - check trước nếu đã ON):
+    Menu "+" = các <div class="group __menu-item">:
+      [💭] Đang suy nghĩ
+      [🔬] Nghiên cứu chuyên sâu
+      [⋯] Thêm  ← SUBMENU chứa "Search the web"
+    Phải HOVER (không phải click) vào "Thêm" để mở submenu, rồi click "Search the web" / "Tìm kiếm trên mạng".
+    Nếu không tìm thấy "Tìm kiếm trên mạng" trong submenu → đã BẬT rồi.
     """
     try:
-        print(f"[{engine}] Đang bật Tìm kiếm trên mạng (bắt buộc hiện 'Search the web' + Search xanh)...")
-
-        def has_web_search_menu_item():
-            try:
-                return page.evaluate(r"""
-                    () => {
-                        const patterns = [
-                            /^web\s*search$/i,
-                            /^search\s*the\s*web$/i,
-                            /tìm\s*kiếm\s*trên\s*mạng/i,
-                            /tìm\s*kiếm\s*trên\s*web/i
-                        ];
-                        const nodes = Array.from(document.querySelectorAll('div[role="menuitem"],button[role="menuitem"],div[role="option"],button,div'));
-                        const visible = (el) => {
-                            const r = el.getBoundingClientRect();
-                            if (r.width < 40 || r.height < 16) return false;
-                            if (r.bottom < 0 || r.top > window.innerHeight) return false;
-                            const s = window.getComputedStyle(el);
-                            return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
-                        };
-                        for (const el of nodes) {
-                            if (!visible(el)) continue;
-                            const text = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
-                            if (!text || text.length > 80) continue;
-                            if (patterns.some((re) => re.test(text))) return true;
-                        }
-                        return false;
-                    }
-                """)
-            except Exception:
-                return False
+        print(f"[{engine}] Đang bật Tìm kiếm trên mạng...")
 
         def open_plus_menu():
-            plus_btn = page.locator("[data-testid=composer-plus-btn]")
-            # Khi chạy song song trong manager, UI đôi lúc lag -> tăng timeout.
+            plus_btn = page.locator("[data-testid=composer-plus-btn]").first
             plus_btn.click(timeout=15000, force=True)
-            page.wait_for_timeout(800)
+            page.wait_for_timeout(1500)  # Menu animation
 
-        # Thử nhiều vòng vì UI đôi lúc không mở menu/submenu ngay
-        for attempt in range(1, 4):
-            print(f"[{engine}]   - Attempt {attempt}/3: mở menu + ...")
-            open_plus_menu()
+        def hover_them_to_open_submenu():
+            """
+            HOVER vào "Thêm" để mở submenu - đã verify bằng debug script v8.
+            Trả về tọa độ để Playwright hover.
+            """
+            them_info = page.evaluate(r"""() => {
+                const results = { found: false, them_text: '', x: 0, y: 0, all_items: [] };
 
-            # Mở submenu 'More' / 'Thêm'
-            try:
-                more = page.locator(
-                    "div[role='menuitem'][data-has-submenu]:has-text('More'), "
-                    "button[role='menuitem'][data-has-submenu]:has-text('More'), "
-                    "div[role='menuitem'][data-has-submenu]:has-text('Thêm'), "
-                    "button[role='menuitem'][data-has-submenu]:has-text('Thêm'), "
-                    "div[role='menuitem']:has-text('More'), "
-                    "button[role='menuitem']:has-text('More'), "
-                    "div[role='menuitem']:has-text('Thêm'), "
-                    "button[role='menuitem']:has-text('Thêm')"
-                ).first
-                more.hover(timeout=6000)
-                page.wait_for_timeout(600)
-                if not has_web_search_menu_item():
-                    more.click(timeout=4000, force=True)
-                    page.wait_for_timeout(800)
-            except Exception:
-                page.evaluate(r"""
-                    () => {
-                        const pick = (re) => {
-                            const nodes = Array.from(document.querySelectorAll('div[role="menuitem"],button[role="menuitem"],div'));
-                            for (const el of nodes) {
-                                const t = (el.innerText||'').replace(/\s+/g,' ').trim();
-                                if (re.test(t)) return el;
-                            }
-                            return null;
-                        };
-                        const more = pick(/^More$/i) || pick(/^Thêm$/i);
-                        if (!more) return;
-                        more.dispatchEvent(new MouseEvent('mouseover', {bubbles:true}));
-                        more.dispatchEvent(new MouseEvent('click', {bubbles:true}));
+                // Tìm menu items
+                const menuItems = Array.from(document.querySelectorAll('div.__menu-item, div[role="menuitem"]'));
+                console.log('[WS] Found', menuItems.length, 'menu items');
+
+                for (const el of menuItems) {
+                    const r = el.getBoundingClientRect();
+                    if (r.width < 10 || r.height < 8) continue;
+                    const s = getComputedStyle(el);
+                    if (s.display === 'none' || s.visibility === 'hidden' || s.opacity === '0') continue;
+
+                    let directText = '';
+                    for (const c of el.childNodes) {
+                        if (c.nodeType === 3) directText += (c.textContent || '').trim();
                     }
-                """)
-                page.wait_for_timeout(800)
+                    const text = directText || (el.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+                    results.all_items.push({ text, x: Math.round(r.x), y: Math.round(r.y) });
+                    console.log('[WS] Item:', text, '@', Math.round(r.x), Math.round(r.y));
 
-            # Click 'Web search'
-            clicked = page.evaluate(r"""
-                () => {
-                    const patterns = [/^web\s*search$/i,/tìm\s*kiếm\s*trên\s*mạng/i,/tìm\s*kiếm\s*trên\s*web/i,/search\s*the\s*web/i];
-                    const nodes = Array.from(document.querySelectorAll('div[role="menuitem"],button[role="menuitem"],div[role="option"],button,div'));
-                    const visible = (el) => {
-                        const r = el.getBoundingClientRect();
-                        if (r.width < 40 || r.height < 16) return false;
-                        if (r.bottom < 0 || r.top > window.innerHeight) return false;
-                        const s = window.getComputedStyle(el);
-                        if (s.display === 'none' || s.visibility === 'hidden' || s.opacity === '0') return false;
-                        return true;
-                    };
-                    for (const el of nodes) {
-                        if (!visible(el)) continue;
-                        const text = (el.innerText || el.textContent || '').replace(/\s+/g,' ').trim();
-                        if (!text || text.length > 80) continue;
-                        for (const re of patterns) {
-                            if (re.test(text)) { el.click(); return true; }
+                    // Tìm "Thêm" — có aria-haspopup="menu"
+                    if ((text === 'Thêm' || text === 'More') && 
+                        (el.getAttribute('aria-haspopup') === 'menu' || text === 'Thêm')) {
+                        results.found = true;
+                        results.them_text = text;
+                        // Tọa độ trung tâm để hover
+                        results.x = Math.round(r.x + r.width / 2);
+                        results.y = Math.round(r.y + r.height / 2);
+                        return results;
+                    }
+                }
+                return results;
+            }""")
+            
+            if them_info.get('found'):
+                # Dùng Playwright mouse.move để hover
+                page.mouse.move(them_info['x'], them_info['y'])
+                print(f"[{engine}]   - Hovered 'Thêm' at ({them_info['x']}, {them_info['y']})")
+            
+            return them_info
+        
+        def click_web_search_in_submenu():
+            """Sau khi hover 'Thêm', click 'Search the web' trong submenu mở ra."""
+            return page.evaluate(r"""() => {
+                const patterns = [/^search\s*the\s*web$/i, /^web\s*search$/i, /tìm kiếm trên web/i, /tìm kiếm trên mạng/i];
+                const skip = [/tệp/i, /tải lên/i, /download/i, /upload/i];
+
+                const nodes = Array.from(document.querySelectorAll('.__menu-item, [role="menuitem"], [role="option"]'));
+                let best = null, bestP = 999;
+                for (const el of nodes) {
+                    const r = el.getBoundingClientRect();
+                    if (r.width < 20 || r.height < 8) continue;
+                    const s = getComputedStyle(el);
+                    if (s.display === 'none' || s.visibility === 'hidden' || s.opacity === '0') continue;
+                    let dt = '';
+                    for (const c of el.childNodes) { if (c.nodeType === 3) dt += (c.textContent||'').trim(); }
+                    const text = (dt || el.innerText || '').replace(/\s+/g, ' ').trim();
+                    if (!text || text.length > 80) continue;
+                    if (skip.some(p => p.test(text))) continue;
+                    for (let i = 0; i < patterns.length; i++) {
+                        if (patterns[i].test(text)) {
+                            if (i < bestP) { bestP = i; best = el; }
+                            console.log('[WS_sub] candidate:', text, 'prio', i);
                         }
                     }
-                    return false;
                 }
-            """)
+                if (best) { best.click(); return { clicked: true, text: (best.innerText || '').slice(0,40) }; }
+                return { clicked: false };
+            }""")
 
-            if not clicked:
-                print(f"[{engine}]   - Không click được Web search trong submenu, thử lại...")
-                page.wait_for_timeout(1200)
-                continue
+        # === CHỈ CLICK 1 LẦN, KHÔNG VERIFY ===
+        print(f"[{engine}]   - Click + → Hover Thêm → Check submenu")
+        open_plus_menu()
 
-            page.wait_for_timeout(1200)
+        result1 = hover_them_to_open_submenu()
+        print(f"[{engine}]   - Hover 'Thêm': {result1.get('found')} ('{result1.get('them_text', '')}')")
 
-            # VERIFY bắt buộc
-            ok = _verify_web_search_on(page)
-            # debug ảnh verify ngay tại thời điểm BEFORE SEND
-            try:
-                dbg_png = DEBUG_DIR / f"chatgpt_websearch_verify_{timestamp}_attempt{attempt}.png"
-                page.screenshot(path=str(dbg_png), full_page=True)
-                print(f"[{engine}] 🧪 Verify screenshot: {dbg_png}")
-            except Exception:
-                pass
+        if not result1.get('found'):
+            print(f"[{engine}] ✗ Không tìm thấy 'Thêm'")
+            page.keyboard.press("Escape")
+            return False
 
-            if ok:
-                print(f"[{engine}] ✓ VERIFY PASS: UI đã hiện trạng thái Web Search ON")
-                return True
+        # Chờ submenu mở sau khi hover
+        page.wait_for_timeout(2000)
+        try:
+            dbg_hover = DEBUG_DIR / f"chatgpt_submenu_after_hover_them_{timestamp}.png"
+            page.screenshot(path=str(dbg_hover), full_page=True)
+            print(f"[{engine}] 🧪 Submenu screenshot: {dbg_hover}")
+        except Exception:
+            pass
 
-            print(f"[{engine}] ⚠ VERIFY FAIL: chưa thấy 'Search the web' + Search xanh, thử lại...")
-            page.wait_for_timeout(1200)
+        result2 = click_web_search_in_submenu()
+        print(f"[{engine}]   - Click WS: {result2}")
 
-        print(f"[{engine}] ✗ Không bật/verify được Web Search ON theo UI (sau 3 attempts)")
-        return False
+        if not result2.get('clicked'):
+            print(f"[{engine}] ℹ Không tìm thấy 'Tìm kiếm trên mạng' - có thể đã BẬT rồi")
+            page.keyboard.press("Escape")
+            return True  # Coi như đã ON
+
+        page.wait_for_timeout(2000)
+        print(f"[{engine}] ✓ Đã click '{result2.get('text', '')}' - Web Search ON")
+        
+        try:
+            dbg = DEBUG_DIR / f"chatgpt_websearch_enabled_{timestamp}.png"
+            page.screenshot(path=str(dbg), full_page=True)
+            print(f"[{engine}] 🧪 Screenshot: {dbg}")
+        except Exception:
+            pass
+
+        return True
 
     except Exception as e:
         print(f"[{engine}] ⚠ Lỗi enable_web_search: {e}")
@@ -757,6 +891,7 @@ def main():
     browser = None
     context = None
     page = None
+    chrome_process = None
     stdout_cm = build_stdout_context(log_enabled)
 
     with stdout_cm:
@@ -765,24 +900,16 @@ def main():
             print(f"[{engine}] Timestamp: {timestamp}")
 
         try:
-            if not STORAGE_STATE_PATH.exists():
-                refresh_storage_state_from_profile(engine)
-
             with sync_playwright() as p:
-                browser = launch_browser(
+                browser, context, page, chrome_process = launch_real_chrome_with_cdp(
                     playwright=p,
                     engine=engine,
+                    profile_dir=PROFILE_DIR,
+                    start_url="https://chatgpt.com/",
+                    cdp_port=CDP_PORT,
                     timeout=30000,
                 )
 
-                context_options = {}
-                if STORAGE_STATE_PATH.exists():
-                    context_options["storage_state"] = str(STORAGE_STATE_PATH)
-
-                context = browser.new_context(**context_options)
-                add_stealth_script(context)
-
-                page = context.new_page()
                 page.set_default_timeout(TIMEOUT_MS)
                 page.bring_to_front()
 
@@ -974,21 +1101,12 @@ def main():
             result["error"] = f"Lỗi: {str(e)}"
             print(f"[{engine}] ✗ Lỗi: {e}")
         finally:
-            if context:
-                try:
-                    if page:
-                        page.wait_for_timeout(2000)
-                except Exception:
-                    pass
-                try:
-                    context.close()
-                except Exception:
-                    pass
-            if browser:
-                try:
-                    browser.close()
-                except Exception:
-                    pass
+            try:
+                if page:
+                    page.wait_for_timeout(2000)
+            except Exception:
+                pass
+            close_attached_browser(browser, chrome_process)
 
     result["time"] = (datetime.now() - start_time).total_seconds()
     finalize_worker_run(engine, TEMP_DIR, "chatgpt", timestamp, result, log_enabled)

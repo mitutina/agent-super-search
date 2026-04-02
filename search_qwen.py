@@ -16,6 +16,7 @@ import os
 import platform
 import sys
 import time
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -309,6 +310,141 @@ def launch_browser(playwright, engine: str, timeout: int = 30000, extra_args=Non
     raise RuntimeError(f"Không khởi động được browser cho {engine}: {last_error}")
 
 
+
+def find_browser_executable() -> str:
+    env_exec = os.environ.get("AGENT_SEARCH_BROWSER_EXECUTABLE")
+    if env_exec:
+        env_path = Path(env_exec)
+        if env_path.exists():
+            return str(env_path)
+
+    system = platform.system()
+    candidates = []
+    if system == "Windows":
+        candidates = [
+            Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+            Path(r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"),
+            Path.home() / r"AppData\Local\Google\Chrome\Application\chrome.exe",
+        ]
+    elif system == "Linux":
+        candidates = [
+            Path("/usr/bin/google-chrome"),
+            Path("/usr/bin/google-chrome-stable"),
+            Path("/usr/bin/chromium"),
+            Path("/usr/bin/chromium-browser"),
+            Path("/snap/bin/chromium"),
+        ]
+    elif system == "Darwin":
+        candidates = [
+            Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            Path.home() / "Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        ]
+
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+
+    raise RuntimeError("Khong tim thay Chrome/Chromium.")
+
+
+def is_cdp_endpoint_ready(port: int) -> bool:
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=1.5) as response:
+            return response.status == 200
+    except Exception:
+        return False
+
+
+def wait_for_cdp_endpoint(port: int, timeout_seconds: float) -> None:
+    deadline = time.time() + timeout_seconds
+    last_error = None
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=1.5) as response:
+                if response.status == 200:
+                    return
+        except Exception as exc:
+            last_error = exc
+        time.sleep(0.25)
+    raise RuntimeError(f"Chrome CDP endpoint khong san sang o port {port}: {last_error}")
+
+
+def launch_real_chrome_with_cdp(playwright, engine: str, profile_dir: Path, start_url: str, cdp_port: int, timeout: int = 30000):
+    ensure_dirs(profile_dir)
+    chrome_process = None
+    endpoint = f"http://127.0.0.1:{cdp_port}"
+
+    if not is_cdp_endpoint_ready(cdp_port):
+        browser_path = find_browser_executable()
+        clear_profile_lock(profile_dir)
+        cmd = [
+            browser_path,
+            f"--user-data-dir={profile_dir}",
+            "--profile-directory=Default",
+            "--no-first-run",
+            "--start-maximized",
+            f"--remote-debugging-port={cdp_port}",
+            "--new-window",
+            start_url,
+        ]
+        chrome_process = subprocess.Popen(
+            cmd,
+            cwd=str(BASE_DIR),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        wait_for_cdp_endpoint(cdp_port, max(timeout / 1000.0, 15.0))
+
+    browser = playwright.chromium.connect_over_cdp(endpoint)
+    if not browser.contexts:
+        raise RuntimeError(f"Khong attach duoc Chrome context cho {engine}")
+
+    context = browser.contexts[0]
+    page = context.pages[-1] if context.pages else context.new_page()
+    print(f"[{engine}] Browser ready (real Chrome + CDP, port {cdp_port})")
+    return browser, context, page, chrome_process
+
+
+def close_attached_browser(browser, chrome_process):
+    if browser is not None:
+        try:
+            browser.close()
+        except Exception:
+            pass
+
+    if chrome_process is not None:
+        try:
+            chrome_process.wait(timeout=5)
+        except Exception:
+            try:
+                chrome_process.terminate()
+            except Exception:
+                pass
+            try:
+                chrome_process.wait(timeout=5)
+            except Exception:
+                try:
+                    chrome_process.kill()
+                except Exception:
+                    pass
+
+
+def open_real_browser_for_setup(engine: str, profile_dir: Path, start_url: str):
+    browser_path = find_browser_executable()
+    ensure_dirs(profile_dir)
+    clear_profile_lock(profile_dir)
+    cmd = [
+        browser_path,
+        f"--user-data-dir={profile_dir}",
+        "--profile-directory=Default",
+        "--no-first-run",
+        "--start-maximized",
+        "--new-window",
+        start_url,
+    ]
+    subprocess.Popen(cmd, cwd=str(BASE_DIR))
+    print(f"[{engine}] Da mo Chrome that voi profile: {profile_dir}")
+
 def detect_page_blockers(page, login_keywords=None, captcha_keywords=None, logout_keywords=None):
     payload = {
         "login_keywords": [k.lower() for k in (login_keywords or [])],
@@ -465,6 +601,7 @@ STORAGE_STATE_PATH = BASE_DIR / "profiles" / "qwen_storage_state.json"
 OUTPUT_DIR = BASE_DIR / "output"
 TEMP_DIR = OUTPUT_DIR / "temp"
 TIMEOUT_MS = 60000
+CDP_PORT = 9334
 
 
 def open_qwen_home(page):
@@ -574,13 +711,21 @@ def get_assistant_count(page):
 
 
 def wait_for_response(page, previous_count: int):
-    print("[Qwen] Đang đợi response...")
+    print("[Qwen] ?ang ??i response...")
     prev_text = ""
     stable_count = 0
-    max_wait = 180
+    max_wait = 480
     saw_new_message = False
     min_seconds = 12
     min_chars = 20
+
+    def is_thinking_active():
+        try:
+            body_text = page.locator("body").inner_text(timeout=1000).lower()
+        except Exception:
+            return False
+        keywords = ["thinking", "thinking completed", "suy ngh?", "reasoning", "??"]
+        return any(keyword in body_text for keyword in keywords)
 
     for second in range(max_wait):
         page.wait_for_timeout(1000)
@@ -588,17 +733,21 @@ def wait_for_response(page, previous_count: int):
         current_count = get_assistant_count(page)
         current_text = get_last_assistant_text(page).strip()
         current_text_clean = current_text.replace("Thinking completed", "", 1).strip()
+        thinking_active = is_thinking_active()
 
         if current_count > previous_count:
             saw_new_message = True
 
         if second % 10 == 0:
             print(
-                f"[Qwen] Chờ response... ({second}s, assistants={current_count}, chars={len(current_text_clean)})"
+                f"[Qwen] Ch? response... ({second}s, assistants={current_count}, chars={len(current_text_clean)}, thinking={thinking_active})"
             )
 
-        if "Thinking" in current_text and len(current_text_clean) < 5:
-            prev_text = current_text_clean or prev_text
+        if thinking_active and not current_text_clean:
+            stable_count = 0
+            continue
+
+        if not saw_new_message and thinking_active:
             stable_count = 0
             continue
 
@@ -614,8 +763,8 @@ def wait_for_response(page, previous_count: int):
 
         if current_text_clean == prev_text:
             stable_count += 1
-            if stable_count >= 8:
-                print(f"[Qwen] ✓ Text ổn định sau {second}s")
+            if stable_count >= 5:
+                print(f"[Qwen] ? Text ?n ??nh sau {second}s")
                 return current_text_clean
         else:
             prev_text = current_text_clean
@@ -644,8 +793,10 @@ def main():
 
     ensure_dirs(PROFILE_DIR, OUTPUT_DIR, TEMP_DIR)
 
+    browser = None
     context = None
     page = None
+    chrome_process = None
     stdout_cm = build_stdout_context(log_enabled)
 
     with stdout_cm:
@@ -655,15 +806,15 @@ def main():
 
         try:
             with sync_playwright() as playwright:
-                context = launch_persistent_context(
+                browser, context, page, chrome_process = launch_real_chrome_with_cdp(
                     playwright=playwright,
-                    profile_dir=PROFILE_DIR,
                     engine=engine,
-                    storage_state_path=STORAGE_STATE_PATH,
+                    profile_dir=PROFILE_DIR,
+                    start_url="https://chat.qwen.ai/",
+                    cdp_port=CDP_PORT,
                     timeout=30000,
                 )
 
-                page = context.pages[0] if context.pages else context.new_page()
                 page.set_default_timeout(TIMEOUT_MS)
                 page.bring_to_front()
 
@@ -706,16 +857,12 @@ def main():
             result["error"] = f"Lỗi: {exc}"
             print(f"[{engine}] ✗ Lỗi: {exc}")
         finally:
-            if context is not None:
-                try:
-                    if page is not None:
-                        page.wait_for_timeout(1500)
-                except Exception:
-                    pass
-                try:
-                    context.close()
-                except Exception:
-                    pass
+            try:
+                if page is not None:
+                    page.wait_for_timeout(1500)
+            except Exception:
+                pass
+            close_attached_browser(browser, chrome_process)
 
     result["time"] = (datetime.now() - start_time).total_seconds()
     finalize_worker_run(engine, TEMP_DIR, "qwen", timestamp, result, log_enabled)

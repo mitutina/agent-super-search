@@ -19,6 +19,7 @@ import os
 import platform
 import sys
 import time
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -312,6 +313,141 @@ def launch_browser(playwright, engine: str, timeout: int = 30000, extra_args=Non
     raise RuntimeError(f"Không khởi động được browser cho {engine}: {last_error}")
 
 
+
+def find_browser_executable() -> str:
+    env_exec = os.environ.get("AGENT_SEARCH_BROWSER_EXECUTABLE")
+    if env_exec:
+        env_path = Path(env_exec)
+        if env_path.exists():
+            return str(env_path)
+
+    system = platform.system()
+    candidates = []
+    if system == "Windows":
+        candidates = [
+            Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+            Path(r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"),
+            Path.home() / r"AppData\Local\Google\Chrome\Application\chrome.exe",
+        ]
+    elif system == "Linux":
+        candidates = [
+            Path("/usr/bin/google-chrome"),
+            Path("/usr/bin/google-chrome-stable"),
+            Path("/usr/bin/chromium"),
+            Path("/usr/bin/chromium-browser"),
+            Path("/snap/bin/chromium"),
+        ]
+    elif system == "Darwin":
+        candidates = [
+            Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            Path.home() / "Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        ]
+
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+
+    raise RuntimeError("Khong tim thay Chrome/Chromium.")
+
+
+def is_cdp_endpoint_ready(port: int) -> bool:
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=1.5) as response:
+            return response.status == 200
+    except Exception:
+        return False
+
+
+def wait_for_cdp_endpoint(port: int, timeout_seconds: float) -> None:
+    deadline = time.time() + timeout_seconds
+    last_error = None
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=1.5) as response:
+                if response.status == 200:
+                    return
+        except Exception as exc:
+            last_error = exc
+        time.sleep(0.25)
+    raise RuntimeError(f"Chrome CDP endpoint khong san sang o port {port}: {last_error}")
+
+
+def launch_real_chrome_with_cdp(playwright, engine: str, profile_dir: Path, start_url: str, cdp_port: int, timeout: int = 30000):
+    ensure_dirs(profile_dir)
+    chrome_process = None
+    endpoint = f"http://127.0.0.1:{cdp_port}"
+
+    if not is_cdp_endpoint_ready(cdp_port):
+        browser_path = find_browser_executable()
+        clear_profile_lock(profile_dir)
+        cmd = [
+            browser_path,
+            f"--user-data-dir={profile_dir}",
+            "--profile-directory=Default",
+            "--no-first-run",
+            "--start-maximized",
+            f"--remote-debugging-port={cdp_port}",
+            "--new-window",
+            start_url,
+        ]
+        chrome_process = subprocess.Popen(
+            cmd,
+            cwd=str(BASE_DIR),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        wait_for_cdp_endpoint(cdp_port, max(timeout / 1000.0, 15.0))
+
+    browser = playwright.chromium.connect_over_cdp(endpoint)
+    if not browser.contexts:
+        raise RuntimeError(f"Khong attach duoc Chrome context cho {engine}")
+
+    context = browser.contexts[0]
+    page = context.pages[-1] if context.pages else context.new_page()
+    print(f"[{engine}] Browser ready (real Chrome + CDP, port {cdp_port})")
+    return browser, context, page, chrome_process
+
+
+def close_attached_browser(browser, chrome_process):
+    if browser is not None:
+        try:
+            browser.close()
+        except Exception:
+            pass
+
+    if chrome_process is not None:
+        try:
+            chrome_process.wait(timeout=5)
+        except Exception:
+            try:
+                chrome_process.terminate()
+            except Exception:
+                pass
+            try:
+                chrome_process.wait(timeout=5)
+            except Exception:
+                try:
+                    chrome_process.kill()
+                except Exception:
+                    pass
+
+
+def open_real_browser_for_setup(engine: str, profile_dir: Path, start_url: str):
+    browser_path = find_browser_executable()
+    ensure_dirs(profile_dir)
+    clear_profile_lock(profile_dir)
+    cmd = [
+        browser_path,
+        f"--user-data-dir={profile_dir}",
+        "--profile-directory=Default",
+        "--no-first-run",
+        "--start-maximized",
+        "--new-window",
+        start_url,
+    ]
+    subprocess.Popen(cmd, cwd=str(BASE_DIR))
+    print(f"[{engine}] Da mo Chrome that voi profile: {profile_dir}")
+
 def detect_page_blockers(page, login_keywords=None, captcha_keywords=None, logout_keywords=None):
     payload = {
         "login_keywords": [k.lower() for k in (login_keywords or [])],
@@ -468,6 +604,7 @@ STORAGE_STATE_PATH = BASE_DIR / "profiles" / "deepseek_storage_state.json"
 OUTPUT_DIR = BASE_DIR / "output"
 TEMP_DIR = OUTPUT_DIR / "temp"
 TIMEOUT_MS = 60000
+CDP_PORT = 9333
 
 
 def collapse_reasoning_panel(page, engine):
@@ -518,71 +655,99 @@ def collapse_reasoning_panel(page, engine):
 
 
 def extract_response_text(page, engine):
-    """Extract response text from DeepSeek page, excluding reasoning content"""
-    return page.evaluate("""
-        () => {
-            // DeepSeek uses .ds-markdown or .ds-markdown--block for response content
-            const responseElements = document.querySelectorAll('.ds-markdown, .ds-markdown--block, [class*="markdown"]');
+    """Extract final assistant answer from the main chat area, excluding sidebar/history and reasoning."""
 
-            if (responseElements.length > 0) {
-                // Get the last response element (most recent)
-                const lastResponse = responseElements[responseElements.length - 1];
-                let responseText = lastResponse.innerText || lastResponse.textContent;
+    def visible_on_main(locator):
+        try:
+            if not locator.is_visible(timeout=500):
+                return False
+        except Exception:
+            return False
 
-                if (responseText && responseText.length > 50) {
-                    // Clean the text by removing reasoning lines
-                    const lines = responseText.split('\\n').map(line => line.trim());
-                    const filteredLines = [];
+        try:
+            box = locator.bounding_box()
+        except Exception:
+            box = None
 
-                    for (const line of lines) {
-                        if (!line.includes('Đã suy nghĩ') &&
-                            !line.includes('Đã đọc') &&
-                            !line.includes('Thinking') &&
-                            !line.includes('Reading') &&
-                            line.length > 0) {
-                            filteredLines.push(line);
-                        }
-                    }
+        return bool(box and box.get("x", 0) > 260 and box.get("width", 0) > 40 and box.get("height", 0) > 16)
 
-                    let cleaned = filteredLines.join('\\n');
-                    cleaned = cleaned.replace(/\\n{3,}/g, '\\n\\n');
+    def normalize(text: str) -> str:
+        lines = []
+        for raw in (text or "").splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            lines.append(line)
+        return "\n".join(lines).strip()
 
-                    if (cleaned && cleaned.length > 50) {
-                        return cleaned.trim();
-                    }
-                }
-            }
+    root_selectors = [
+        '.ds-virtual-list-visible-items',
+        '.ds-virtual-list-items',
+        '.ds-virtual-list--printable',
+    ]
 
-            // Fallback: try to find any div with long text content
-            const allDivs = document.querySelectorAll('div');
-            for (let i = allDivs.length - 1; i >= 0; i--) {
-                const div = allDivs[i];
-                const text = div.innerText || div.textContent;
-                if (text && text.length > 200 && !text.includes('Nhắn tin') && !text.includes('Message')) {
-                    // Filter out reasoning lines
-                    const lines = text.split('\\n').map(line => line.trim());
-                    const filteredLines = [];
-                    for (const line of lines) {
-                        if (!line.includes('Đã suy nghĩ') &&
-                            !line.includes('Đã đọc') &&
-                            !line.includes('Thinking') &&
-                            !line.includes('Reading') &&
-                            line.length > 0) {
-                            filteredLines.push(line);
-                        }
-                    }
-                    let cleaned = filteredLines.join('\\n');
-                    cleaned = cleaned.replace(/\\n{3,}/g, '\\n\\n');
-                    if (cleaned && cleaned.length > 50) {
-                        return cleaned.trim();
-                    }
-                }
-            }
+    for root_selector in root_selectors:
+        roots = page.locator(root_selector)
+        try:
+            root_count = roots.count()
+        except Exception:
+            root_count = 0
 
-            return '';
-        }
-    """)
+        for root_index in range(root_count - 1, -1, -1):
+            root = roots.nth(root_index)
+            if not visible_on_main(root):
+                continue
 
+            messages = root.locator('.ds-message')
+            try:
+                message_count = messages.count()
+            except Exception:
+                message_count = 0
+
+            for message_index in range(message_count - 1, -1, -1):
+                message = messages.nth(message_index)
+                if not visible_on_main(message):
+                    continue
+
+                blocks = message.locator('.ds-markdown')
+                try:
+                    block_count = blocks.count()
+                except Exception:
+                    block_count = 0
+
+                for block_index in range(block_count - 1, -1, -1):
+                    block = blocks.nth(block_index)
+                    if not visible_on_main(block):
+                        continue
+                    if block.locator("xpath=ancestor::*[contains(@class, 'ds-think-content')]").count() > 0:
+                        continue
+                    try:
+                        cleaned = normalize(block.inner_text(timeout=1000))
+                    except Exception:
+                        cleaned = ""
+                    if len(cleaned) >= 10:
+                        return cleaned
+
+    fallback_blocks = page.locator('.ds-markdown')
+    try:
+        fallback_count = fallback_blocks.count()
+    except Exception:
+        fallback_count = 0
+
+    for block_index in range(fallback_count - 1, -1, -1):
+        block = fallback_blocks.nth(block_index)
+        if not visible_on_main(block):
+            continue
+        if block.locator("xpath=ancestor::*[contains(@class, 'ds-think-content')]").count() > 0:
+            continue
+        try:
+            cleaned = normalize(block.inner_text(timeout=1000))
+        except Exception:
+            cleaned = ""
+        if len(cleaned) >= 10:
+            return cleaned
+
+    return ""
 
 def clean_response_text(query: str, response_text: str) -> str:
     if not response_text:
@@ -628,8 +793,10 @@ def main():
 
     ensure_dirs(PROFILE_DIR, OUTPUT_DIR, TEMP_DIR)
 
+    browser = None
     context = None
     page = None
+    chrome_process = None
     stdout_cm = build_stdout_context(log_enabled)
 
     with stdout_cm:
@@ -639,15 +806,15 @@ def main():
 
         try:
             with sync_playwright() as p:
-                context = launch_persistent_context(
+                browser, context, page, chrome_process = launch_real_chrome_with_cdp(
                     playwright=p,
-                    profile_dir=PROFILE_DIR,
                     engine=engine,
-                    storage_state_path=STORAGE_STATE_PATH,
+                    profile_dir=PROFILE_DIR,
+                    start_url="https://chat.deepseek.com/",
+                    cdp_port=CDP_PORT,
                     timeout=30000,
                 )
 
-                page = context.pages[0] if context.pages else context.new_page()
                 page.set_default_timeout(TIMEOUT_MS)
                 page.bring_to_front()
 
@@ -726,20 +893,7 @@ def main():
                 for i in range(max_wait):
                     page.wait_for_timeout(1000)
                     is_busy = is_deepseek_busy()
-
-                    current_response = page.evaluate("""
-                        () => {
-                            const messages = document.querySelectorAll('[class*="message"]');
-                            for (let i = messages.length - 1; i >= 0; i--) {
-                                const msg = messages[i];
-                                const text = msg.innerText || msg.textContent;
-                                if (text && text.length > 50 && !text.includes('Nhắn tin')) {
-                                    return text.trim();
-                                }
-                            }
-                            return '';
-                        }
-                    """)
+                    current_response = extract_response_text(page, engine)
 
                     if is_busy:
                         if i % 10 == 0:
@@ -796,16 +950,12 @@ def main():
             result["error"] = f"Lỗi: {str(e)}"
             print(f"[{engine}] ✗ Lỗi: {e}")
         finally:
-            if context:
-                try:
-                    if page:
-                        page.wait_for_timeout(2000)
-                except Exception:
-                    pass
-                try:
-                    context.close()
-                except Exception:
-                    pass
+            try:
+                if page:
+                    page.wait_for_timeout(2000)
+            except Exception:
+                pass
+            close_attached_browser(browser, chrome_process)
 
     result["time"] = (datetime.now() - start_time).total_seconds()
     finalize_worker_run(engine, TEMP_DIR, "deepseek", timestamp, result, log_enabled)

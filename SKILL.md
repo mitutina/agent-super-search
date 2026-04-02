@@ -200,8 +200,6 @@ Lưu ý:
 
 ## Kiến Trúc Hiện Tại
 
-Trong bản này không còn `worker_common.py`.
-
 Mỗi file đều tự chạy độc lập:
 - `manager.py` tự điều phối worker và tự tổng hợp kết quả
 - `fix-error.py` tự mở đúng worker setup để user sửa login/captcha

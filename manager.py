@@ -469,7 +469,7 @@ OUTPUT_DIR = BASE_DIR / "output"
 TEMP_DIR = OUTPUT_DIR / "temp"
 FIX_SCRIPT = BASE_DIR / "fix-error.py"
 
-WORKER_TIMEOUT = 360
+WORKER_TIMEOUT = 600
 
 WORKERS = [
     {
