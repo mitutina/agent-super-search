@@ -1,5 +1,5 @@
 # agent-Ai-search
-Ver 6.7
+Ver 6.8
 
 Chức năng của Skill: Dùng chatgpt, gemini, qwen, deepseek để search và tổng hợp thông tin.
 

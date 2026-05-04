@@ -1,10 +1,21 @@
-# Agent-Search v6.7
+# Agent-Search v6.8
 
 Hỏi nhiều web AI song song (ChatGPT, Gemini, DeepSeek, Qwen) qua `manager.py` rồi gom kết quả vào một file.
 
 **Yêu cầu hệ thống:**
 - Windows hoặc Linux có GUI (màn hình thật)
 - KHÔNG hỗ trợ headless server, VPS không GUI
+
+---
+
+## 🖥️ LƯU Ý HỆ ĐIỀU HÀNH
+
+**Lần đầu sử dụng trên bất kỳ hệ điều hành nào:** đọc `readme-for-new-setup.md` để setup (cài Python, Chrome, dependencies, tạo session). Mỗi hệ có hướng dẫn riêng trong file đó.
+
+- **Windows native hoặc Linux native có GUI** → sau khi setup, dùng bình thường theo hướng dẫn bên dưới.
+- **WSL (Windows Subsystem for Linux)**:
+  - Setup sẽ move toàn bộ skill sang `C:\agent-super-search\` trên Windows. Thư mục WSL chỉ giữ lại 1 file `SKILL.md` redirect trỏ về đó.
+  - Sau khi setup: mọi thao tác dùng skill tại `C:\agent-super-search\` qua Windows Python (không dùng python3 của WSL).
 
 ---
 
@@ -51,43 +62,37 @@ python3 manager.py "query của bạn" 0
 
 ### WSL (Windows Subsystem for Linux)
 
-**⚠️ BẮT BUỘC:** Dùng Python và Chrome của Windows, không dùng python3 của WSL.
+**⚠️ QUAN TRỌNG:** Skill này đã được move sang Windows tại `C:\agent-super-search\`.
+Mọi lệnh Python phải chạy qua Windows Python, không dùng python3 của WSL.
 
-**🔍 Bước 1: Tìm Python path (chỉ làm lần đầu)**
+**Lần đầu sử dụng:** Đọc `readme-for-new-setup.md` để setup (move skill sang Windows, cài dep, tạo session).
+
+**Sử dụng hàng ngày (sau khi đã setup):**
+
 ```bash
-# Tìm Python trong AppData:
-ls /mnt/c/Users/*/AppData/Local/Programs/Python/
+# Python Windows đã được tìm và ghi lại trong quá trình setup
+# Ví dụ path (agent phải tự tìm và thay thế nếu khác):
+WIN_PYTHON="/mnt/c/Users/openclaw/AppData/Local/Programs/Python/Python313/python.exe"
 
-# Hoặc tìm trong Program Files:
-ls /mnt/c/Program\ Files/Python*/
+# Chạy manager (từ WSL, gọi Windows Python với path skill trên Windows):
+"$WIN_PYTHON" /mnt/c/agent-super-search/manager.py "query của bạn" 1
+"$WIN_PYTHON" /mnt/c/agent-super-search/manager.py "query của bạn" 0
 
-# Hoặc kiểm tra python có trong PATH không:
-/mnt/c/Windows/System32/cmd.exe /c "where python"
+# 1 = hiện log chi tiết, 0 = im lặng, chỉ in kết quả cuối
 ```
 
-**📝 Bước 2: Chạy với path tìm được**
+**Sửa login/captcha:**
 
-**Cách 1 (Khuyến nghị): Dùng trực tiếp Windows Python**
 ```bash
-# Ví dụ với Python313:
-/mnt/c/Users/openclaw/AppData/Local/Programs/Python/Python313/python.exe manager.py "query của bạn" 1
-
-# Hoặc với Python từ Program Files:
-/mnt/c/Program\ Files/Python312/python.exe manager.py "query của bạn" 1
+"$WIN_PYTHON" /mnt/c/agent-super-search/fix-error.py chatgpt
+# hoặc: gemini, deepseek, qwen, all
 ```
-
-**Cách 2: Qua cmd.exe (nếu python đã có trong PATH)**
-```bash
-/mnt/c/Windows/System32/cmd.exe /c "python manager.py \"query của bạn\" 1"
-```
-⚠️ Dễ lỗi quotes/args khi query phức tạp. Chỉ dùng khi Cách 1 không tìm được Python.
 
 **💡 GHI CHÚ CHO AGENT:**
-- **Lần đầu chạy skill trên máy mới:** Phải tìm Python path bằng lệnh trên, test chạy thành công, rồi **GHI LẠI path đúng vào đây** (edit SKILL.md) để lần sau không phải tìm lại.
-- **Ví dụ ghi chú:** `# Máy này dùng: /mnt/c/Users/openclaw/AppData/Local/Programs/Python/Python313/python.exe`
-- **Mỗi máy khác nhau:** Python có thể ở `Python310`, `Python311`, `Python312`, `Python313`, hoặc `Program Files/Python3X/`. Agent phải tự tìm và ghi nhớ.
-
-**Lý do:** Browser cần hiển thị trên desktop Windows, không phải trong WSL.
+- Tất cả file Python nằm trong `C:\agent-super-search\` (truy cập từ WSL qua `/mnt/c/agent-super-search/`)
+- `profiles/` và `output/` nằm trong `C:\agent-super-search\` trên Windows
+- Đọc kết quả từ `/mnt/c/agent-super-search/output/result_<timestamp>.txt`
+- Nếu chưa setup, đọc `readme-for-new-setup.md` trước
 
 ---
 
@@ -118,12 +123,14 @@ nohup google-chrome --user-data-dir="$PWD/profiles/qwen" --profile-directory=Def
 
 ### WSL
 
-**⚠️ CẢNH BÁO:** `fix-error.py` KHÔNG chạy được từ WSL (dùng Python của WSL). Có 2 cách:
+**⚠️ QUAN TRỌNG:** Sau khi WSL setup, dùng `"$WIN_PYTHON" /mnt/c/agent-super-search/fix-error.py` là cách chính (xem mục CHẠY THEO NỀN TẢNG ở trên). `fix-error.py` chạy qua Windows Python sẽ tự mở Chrome với đúng profile trong `C:\agent-super-search\profiles\`.
 
-**Cách 1 (Khuyến nghị): Mở Chrome Windows trực tiếp**
+Nếu cần mở Chrome thủ công (fallback khi fix-error.py không hoạt động):
+
+**Cách 1: Mở Chrome Windows trực tiếp**
 ```bash
 # Mở 1 worker cụ thể:
-/mnt/c/Program\ Files/Google/Chrome/Application/chrome.exe --user-data-dir="/mnt/c/Users/openclaw/.openclaw/workspace/skills/agent-super-search/profiles/chatgpt" --profile-directory=Default --no-first-run https://chatgpt.com/
+/mnt/c/Program\ Files/Google/Chrome/Application/chrome.exe --user-data-dir="C:\agent-super-search\profiles\chatgpt" --profile-directory=Default --no-first-run https://chatgpt.com/
 
 # Hoặc tìm Chrome path:
 ls /mnt/c/Program\ Files/Google/Chrome/Application/
@@ -132,13 +139,13 @@ ls /mnt/c/Users/*/AppData/Local/Google/Chrome/Application/
 
 **Cách 2: Qua cmd.exe (nếu Chrome có trong PATH)**
 ```bash
-/mnt/c/Windows/System32/cmd.exe /c "start chrome --user-data-dir=C:\Users\openclaw\.openclaw\workspace\skills\agent-super-search\profiles\chatgpt https://chatgpt.com/"
+/mnt/c/Windows/System32/cmd.exe /c "start chrome --user-data-dir=C:\agent-super-search\profiles\chatgpt https://chatgpt.com/"
 ```
 
 **💡 GHI CHÚ CHO AGENT:**
 - **Lần đầu:** Tìm Chrome path bằng lệnh `ls` trên, test thành công → **GHI LẠI path vào đây**
 - **Ví dụ:** `# Máy này Chrome ở: /mnt/c/Program Files/Google/Chrome/Application/chrome.exe`
-- **Path profile:** Luôn dùng path tuyệt đối tới `profiles/` trong folder skill
+- **Path profile:** Luôn dùng `C:\agent-super-search\profiles\` (truy cập từ WSL qua `/mnt/c/agent-super-search/profiles/`)
 
 ### Quy tắc fix
 

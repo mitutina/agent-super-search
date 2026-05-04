@@ -1,118 +1,46 @@
-# Agent-Search v6: New Machine Setup
+# Agent-Search v6.8: New Machine Setup
 
-File này chỉ dành cho setup lần đầu hoặc khi mang skill sang máy mới.
+File này là **entry point bắt buộc** khi skill được clone về máy mới hoặc chạy lần đầu.
 
-Không cần đọc file này mỗi lần dùng skill.
+Agent phải đọc file này trước khi làm bất kỳ thao tác nào với skill.
 
-## Phạm Vi Hỗ Trợ
+---
 
-Skill này chỉ hỗ trợ:
-- Windows có desktop GUI
-- Linux có desktop GUI
+## 🖥️ CHỌN HỆ ĐIỀU HÀNH
 
-Skill này không hỗ trợ:
-- máy chỉ có terminal
-- server headless
-- VPS không có màn hình
-- môi trường không mở được browser visible
+Tùy theo hệ điều hành bạn đang chạy:
 
-## Điều Quan Trọng Nhất Về Đường Dẫn
+- **Windows native** → làm theo hướng dẫn [Windows](#-hướng-dẫn-cho-windows-native) bên dưới
+- **Linux native** → làm theo hướng dẫn [Linux](#-hướng-dẫn-cho-linux-native) bên dưới
+- **WSL (Windows Subsystem for Linux)** → làm theo hướng dẫn [WSL](#-hướng-dẫn-cho-wsl-đặc-biệt--phải-làm-đúng-trình-tự) bên dưới (QUAN TRỌNG: phải move skill sang Windows)
 
-Không cần sửa tay đường dẫn profile khi đổi chỗ folder.
+---
 
-Code đã tự resolve mọi path tương đối từ thư mục chứa worker:
-- `profiles/`
-- `output/`
-- `storage_state`
+## 🪟 HƯỚNG DẪN CHO WINDOWS NATIVE
 
-Nghĩa là:
-- cứ giữ `manager.py`, `fix-error.py`, `search_*.py` trong cùng một folder
-- khi copy cả folder sang máy mới, path tự đúng theo folder mới
-- profile luôn nằm trong `./profiles` cạnh các worker
-
-Agent không nên hard-code path tuyệt đối.
-
-## Checklist Agent Phải Check Trên Máy Mới
-
-1. Máy có GUI thật không
-2. Python có sẵn chưa
-3. Chrome hoặc Chromium có sẵn chưa
-4. `playwright` đã cài chưa
-5. Browser runtime của Playwright đã cài chưa
-6. Thư mục `profiles/` đã có session cũ chưa
-7. Nếu user muốn chạy bằng `.venv`, agent đã tạo `.venv` và dùng đúng interpreter chưa
-
-## Check Python
-
-Windows:
+### 1. Check Python
 
 ```bash
 python --version
 ```
 
-Linux:
-
-```bash
-python3 --version
-```
-
-Nếu chưa có Python:
-- Windows: cài Python 3 mới, nhớ bật PATH
-- Linux: cài `python3` và `pip`
-
-Ví dụ Windows có thể dùng:
-
+Nếu chưa có:
 ```bash
 winget install -e --id Python.Python.3.12
 ```
 
-Ví dụ Ubuntu/Debian:
-
-```bash
-sudo apt update
-sudo apt install -y python3 python3-pip
-```
-
-Nếu agent cài Python mới:
-- chạy lại check version sau khi cài
-
-## Check Chrome hoặc Chromium
-
-Windows:
+### 2. Check Chrome
 
 ```bash
 where chrome
 ```
 
-Linux:
-
-```bash
-which google-chrome
-which chromium
-which chromium-browser
-```
-
-Nếu chưa có browser:
-- Windows: cài Google Chrome
-- Linux: cài Google Chrome hoặc Chromium bằng package manager phù hợp distro
-
-Ví dụ Windows:
-
+Nếu chưa có:
 ```bash
 winget install -e --id Google.Chrome
 ```
 
-Lưu ý:
-- browser phải mở được cửa sổ thật
-- không dùng headless cho skill này
-
-## Cài Dependency Python
-
-Mặc định skill này được viết theo kiểu dùng Python hệ thống.
-
-### Cách mặc định: chạy thẳng bằng Python máy thật
-
-Windows:
+### 3. Cài dependency
 
 ```bash
 python -m pip install -U pip
@@ -120,111 +48,184 @@ python -m pip install -r requirements.txt
 python -m playwright install chromium
 ```
 
-Linux:
-
-```bash
-python3 -m pip install -U pip
-python3 -m pip install -r requirements.txt
-python3 -m playwright install chromium
-```
-
-Nếu Linux thiếu dependency hệ thống cho browser:
-
-```bash
-python3 -m playwright install-deps chromium
-```
-
-### Nếu agent muốn dùng `.venv`
-
-Chỉ làm khi policy hoặc môi trường của agent yêu cầu.
-
-Windows:
-
-```bash
-python -m venv .venv
-.venv\Scripts\python.exe -m pip install -U pip
-.venv\Scripts\python.exe -m pip install -r requirements.txt
-.venv\Scripts\python.exe -m playwright install chromium
-```
-
-Linux:
-
-```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -U pip
-.venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python -m playwright install chromium
-```
-
-Nếu skill này sẽ được dùng lâu dài với `.venv`:
-- agent phải dùng interpreter `.venv` cho tất cả lệnh sau đó
-- agent phải cập nhật local workflow của skill cho đúng
-- vì `SKILL.md` mặc định đang mô tả quy trình chạy thẳng bằng Python của máy thật
-
-## Tạo Session Lần Đầu
-
-Khi máy mới chưa có `profiles/` hoặc session cũ:
-
-Windows:
+### 4. Tạo session lần đầu
 
 ```bash
 python fix-error.py all
 ```
 
-Linux (CHỈ DÙNG NOHUP, KHÔNG DÙNG fix-error.py):
+4 cửa sổ Chrome sẽ mở ra (ChatGPT, Gemini, DeepSeek, Qwen).
+**User phải tự đăng nhập vào từng cửa sổ**, xong thì đóng lại.
 
-⚠️ **Trên Linux, `fix-error.py` sẽ bị văng browser ngay vì process cha exit. Dùng `nohup` thay thế:**
-
-```bash
-# Mở cả 4 browser (ChatGPT, Gemini, DeepSeek, Qwen) cùng lúc:
-nohup /usr/bin/google-chrome --user-data-dir=$PWD/profiles/chatgpt --profile-directory=Default --no-first-run --start-maximized --disable-gpu --disable-webgl --disable-software-rasterizer https://chatgpt.com/ > /dev/null 2>&1 &
-nohup /usr/bin/google-chrome --user-data-dir=$PWD/profiles/gemini --profile-directory=Default --no-first-run --start-maximized --disable-gpu --disable-webgl --disable-software-rasterizer https://gemini.google.com/app > /dev/null 2>&1 &
-nohup /usr/bin/google-chrome --user-data-dir=$PWD/profiles/deepseek --profile-directory=Default --no-first-run --start-maximized --disable-gpu --disable-webgl --disable-software-rasterizer https://chat.deepseek.com/ > /dev/null 2>&1 &
-nohup /usr/bin/google-chrome --user-data-dir=$PWD/profiles/qwen --profile-directory=Default --no-first-run --start-maximized --disable-gpu --disable-webgl --disable-software-rasterizer https://chat.qwen.ai/ > /dev/null 2>&1 &
-```
-
-(Lưu ý: nếu Chrome ở đường dẫn khác, thay `/usr/bin/google-chrome` bằng `which google-chrome` hoặc `which chromium`)
-
-Quy trình setup:
-1. Dùng `nohup` command trên để mở 4 cửa sổ Chrome cho cả 4 profile
-2. Mỗi cửa sổ vào thẳng đúng website tương ứng
-3. Agent hoặc user đăng nhập vào từng dịch vụ trong đúng cửa sổ đó
-4. Nếu có captcha, xử lý ngay trong browser tương ứng
-5. Nếu có popup che ô chat, đóng nó
-6. Không cần nhấn `Enter` trong terminal
-7. Browser sẽ giữ mở cho tới khi user tự đóng cửa sổ
-8. Script `nohup` đã exit, nhưng Chrome vẫn chạy độc lập
-9. Đăng nhập xong ở cửa sổ nào thì tự đóng cửa sổ đó
-
-Sau setup, nên kiểm tra:
-- `profiles/chatgpt`
-- `profiles/gemini`
-- `profiles/deepseek`
-- `profiles/qwen`
-- các file `*_storage_state.json`
-
-## Smoke Test Sau Setup
-
-Windows:
+### 5. Smoke test
 
 ```bash
 python manager.py "test" 1
 ```
 
-Linux:
+### 6. Hoàn tất
+
+Skill đã sẵn sàng. Dùng `SKILL.md` để biết cách chạy hàng ngày.
+
+---
+
+## 🐧 HƯỚNG DẪN CHO LINUX NATIVE
+
+### 1. Check Python
+
+```bash
+python3 --version
+```
+
+Nếu chưa có (Ubuntu/Debian):
+```bash
+sudo apt update && sudo apt install -y python3 python3-pip
+```
+
+### 2. Check Chrome/Chromium
+
+```bash
+which google-chrome || which chromium || which chromium-browser
+```
+
+Nếu chưa có (Ubuntu/Debian):
+```bash
+sudo apt install -y google-chrome-stable
+# hoặc
+sudo apt install -y chromium-browser
+```
+
+### 3. Cài dependency
+
+```bash
+python3 -m pip install -U pip
+python3 -m pip install -r requirements.txt
+python3 -m playwright install chromium
+python3 -m playwright install-deps chromium
+```
+
+### 4. Tạo session lần đầu (DÙNG NOHUP, KHÔNG dùng fix-error.py)
+
+⚠️ Trên Linux, `fix-error.py` sẽ bị kill browser khi process cha exit. Phải dùng `nohup`:
+
+```bash
+nohup google-chrome --user-data-dir="$PWD/profiles/chatgpt" --profile-directory=Default --no-first-run --start-maximized --disable-gpu --disable-webgl --disable-software-rasterizer https://chatgpt.com/ > /dev/null 2>&1 &
+nohup google-chrome --user-data-dir="$PWD/profiles/gemini" --profile-directory=Default --no-first-run --start-maximized --disable-gpu --disable-webgl --disable-software-rasterizer https://gemini.google.com/app > /dev/null 2>&1 &
+nohup google-chrome --user-data-dir="$PWD/profiles/deepseek" --profile-directory=Default --no-first-run --start-maximized --disable-gpu --disable-webgl --disable-software-rasterizer https://chat.deepseek.com/ > /dev/null 2>&1 &
+nohup google-chrome --user-data-dir="$PWD/profiles/qwen" --profile-directory=Default --no-first-run --start-maximized --disable-gpu --disable-webgl --disable-software-rasterizer https://chat.qwen.ai/ > /dev/null 2>&1 &
+```
+
+User tự đăng nhập vào từng cửa sổ, xong thì đóng lại.
+
+### 5. Smoke test
 
 ```bash
 python3 manager.py "test" 1
 ```
 
-Nếu muốn ít log:
+### 6. Hoàn tất
+
+Skill đã sẵn sàng. Dùng `SKILL.md` để biết cách chạy hàng ngày.
+
+---
+
+## 🔷 HƯỚNG DẪN CHO WSL (ĐẶC BIỆT — PHẢI LÀM ĐÚNG TRÌNH TỰ)
+
+WSL không có GUI → browser không mở được từ WSL → worker sẽ chết nếu chạy Python của WSL.
+
+**Giải pháp:** Move toàn bộ thư mục skill sang Windows (`C:\agent-super-search\`) và chạy mọi thứ bằng Python + Chrome của Windows qua PowerShell.
+
+### Bước 1: Move thư mục skill sang Windows
+
+Từ WSL, copy toàn bộ thư mục skill sang ổ C của Windows:
 
 ```bash
-python manager.py "test" 0
-python3 manager.py "test" 0
+# Xác định đường dẫn nguồn (thư mục skill hiện tại)
+SKILL_SRC="$(dirname "$(readlink -f "$0")")"
+# Nếu $0 không hoạt động, dùng trực tiếp:
+SKILL_SRC="/home/openclaw/.openclaw/workspace-mark6-code/skill/agent-super-search"
+
+# Copy sang Windows qua /mnt/c
+cp -r "$SKILL_SRC" /mnt/c/agent-super-search
+
+# Verify
+ls /mnt/c/agent-super-search/manager.py && echo "✅ Move thành công" || echo "❌ Move thất bại"
 ```
 
-## Khi Nào Phải Chạy Setup Lại
+### Bước 2: Tìm Windows Python path
+
+```bash
+# Tìm Python trên Windows
+/mnt/c/Windows/System32/cmd.exe /c "where python" 2>/dev/null
+
+# Hoặc tìm trong AppData:
+ls /mnt/c/Users/*/AppData/Local/Programs/Python/Python3*/python.exe 2>/dev/null
+
+# Hoặc tìm trong Program Files:
+ls /mnt/c/Program\ Files/Python3*/python.exe 2>/dev/null
+```
+
+**Agent phải ghi lại path tìm được.** Ví dụ:
+```
+WIN_PYTHON="/mnt/c/Users/openclaw/AppData/Local/Programs/Python/Python313/python.exe"
+```
+
+Nếu chưa có Python trên Windows, cài đặt:
+1. Mở `cmd.exe` trên Windows (không phải WSL)
+2. Chạy: `winget install -e --id Python.Python.3.12`
+3. Hoặc tải từ https://python.org
+
+### Bước 3: Cài dependency bằng Windows Python
+
+```bash
+# Dùng đường dẫn Python đã tìm được ở bước 2
+WIN_PYTHON="/mnt/c/Users/openclaw/AppData/Local/Programs/Python/Python313/python.exe"
+
+"$WIN_PYTHON" -m pip install -U pip
+"$WIN_PYTHON" -m pip install -r /mnt/c/agent-super-search/requirements.txt
+"$WIN_PYTHON" -m playwright install chromium
+```
+
+### Bước 4: Tạo session lần đầu (chạy trên Windows)
+
+```bash
+"$WIN_PYTHON" /mnt/c/agent-super-search/fix-error.py all
+```
+
+4 cửa sổ Chrome Windows sẽ mở ra. **User phải tự đăng nhập** vào từng cửa sổ, xong thì đóng lại.
+
+### Bước 5: Smoke test (chạy bằng Windows Python)
+
+```bash
+"$WIN_PYTHON" /mnt/c/agent-super-search/manager.py "test" 1
+```
+
+### Bước 6: Tạo redirect SKILL.md và dọn dẹp WSL
+
+Sau khi move thành công, thư mục skill trong WSL chỉ cần giữ 1 file `SKILL.md` redirect trỏ về Windows.
+File `REDIRECT_SKILL.md` có sẵn template — agent copy nó thành `SKILL.md` rồi xóa các file còn lại:
+
+```bash
+cd "$SKILL_SRC"
+cp REDIRECT_SKILL.md SKILL.md
+rm -f README.md fix-error.py manager.py must-be.png readme-for-new-setup.md requirements.txt search_*.py vi-tri-web-search.png REDIRECT_SKILL.md
+echo "✅ WSL dir cleaned, only SKILL.md remains"
+```
+
+### Bước 7: Hoàn tất
+
+Skill đã sẵn sàng. Từ giờ agent dùng `/mnt/c/agent-super-search/SKILL.md` để tham khảo cách chạy hàng ngày.
+WSL chỉ còn 1 file `SKILL.md` redirect — khi agent mở skill trong WSL, sẽ đọc redirect và biết phải sang Windows.
+
+**Ghi chú cho agent sau setup:**
+- Mọi lệnh `manager.py`, `fix-error.py`, `search_*.py` phải chạy bằng Windows Python
+- Dùng pattern: `"$WIN_PYTHON" /mnt/c/agent-super-search/manager.py "query" 1`
+- `profiles/` và `output/` nằm trong `C:\agent-super-search\` trên Windows
+- Khi cần sửa login: `"$WIN_PYTHON" /mnt/c/agent-super-search/fix-error.py chatgpt`
+
+---
+
+## 🔄 KHI NÀO PHẢI CHẠY SETUP LẠI
 
 - máy mới hoàn toàn
 - `profiles/` chưa có
@@ -233,44 +234,80 @@ python3 manager.py "test" 0
 - worker bị captcha và chưa lưu lại session mới
 - user xóa profile hoặc storage state
 
-## Sửa Lỗi Login hoặc Captcha Sau Này
+---
 
-Không phải lúc nào cũng cần mở lại cả 4 profile.
+## 🔧 SỬA LỖI LOGIN / CAPTCHA SAU NÀY
 
-Nếu chỉ một worker bị lỗi:
-- mở đúng profile của worker đó
-- để user sửa tay
-- khi sửa xong, user tự đóng browser
-- chạy lại manager
-
-Windows:
-
+### Windows native
 ```bash
-python fix-error.py chatgpt
-python fix-error.py gemini
-python fix-error.py deepseek
-python fix-error.py qwen
-python fix-error.py all
+python fix-error.py chatgpt    # hoặc: gemini, deepseek, qwen, all
 ```
 
-Linux (DÙNG NOHUP, KHÔNG DÙNG fix-error.py):
-⚠️ **`fix-error.py` có thể bị văng browser trên Linux. Dùng `nohup` cho từng profile:**
-
+### Linux native (DÙNG NOHUP)
 ```bash
-# Mở từng cái cần sửa:
-nohup /usr/bin/google-chrome --user-data-dir=$HOME/.openclaw/workspace/skills/agent-Ai-search/profiles/chatgpt --profile-directory=Default --disable-gpu https://chatgpt.com/ > /dev/null 2>&1 &
-nohup /usr/bin/google-chrome --user-data-dir=$HOME/.openclaw/workspace/skills/agent-Ai-search/profiles/gemini --profile-directory=Default --disable-gpu https://gemini.google.com/app > /dev/null 2>&1 &
-nohup /usr/bin/google-chrome --user-data-dir=$HOME/.openclaw/workspace/skills/agent-Ai-search/profiles/deepseek --profile-directory=Default --disable-gpu https://chat.deepseek.com/ > /dev/null 2>&1 &
-nohup /usr/bin/google-chrome --user-data-dir=$HOME/.openclaw/workspace/skills/agent-Ai-search/profiles/qwen --profile-directory=Default --disable-gpu https://chat.qwen.ai/ > /dev/null 2>&1 &
+nohup google-chrome --user-data-dir="$PWD/profiles/chatgpt" --profile-directory=Default --no-first-run --start-maximized --disable-gpu https://chatgpt.com/ > /dev/null 2>&1 &
 ```
 
-Lưu ý:
-- `fix-error.py` hoạt động như launcher (mở Chrome xong exit) — tốt trên Windows
-- Trên Linux, browser sẽ bị kill theo parent process → **dùng `nohup` thay thế**
-- Browser sẽ giữ mở cho tới khi user tự đóng cửa sổ
-- Không dùng bước nhấn `Enter` trong terminal
+### WSL (dùng Windows Python)
+```bash
+WIN_PYTHON="/mnt/c/Users/openclaw/AppData/Local/Programs/Python/Python313/python.exe"
+"$WIN_PYTHON" /mnt/c/agent-super-search/fix-error.py chatgpt
+# hoặc: gemini, deepseek, qwen, all
+```
 
-## Lưu Ý GitHub
+**Quy tắc chung:**
+- `all` = máy mới hoặc cần đăng nhập lại nhiều worker
+- `chatgpt|gemini|deepseek|qwen` = chỉ 1 worker bị lỗi
+- User tự đăng nhập xong → tự đóng browser
+- Agent chỉ chạy fix khi user đã đồng ý
+
+---
+
+## ✅ PREFLIGHT CHECK (cho mọi nền tảng)
+
+Trước khi chạy skill, check nhanh:
+
+1. [ ] Desktop đang mở, browser có thể hiện cửa sổ thật
+2. [ ] Python chạy được (Windows: `python`, Linux: `python3`, WSL: Windows Python path)
+3. [ ] Chrome hoặc Chromium cài đặt
+4. [ ] Thư mục skill có đủ: `manager.py`, `fix-error.py`, `search_*.py`
+5. [ ] Có `profiles/` folder (nếu chưa có → chạy bước tạo session)
+
+Nếu thiếu → quay lại làm bước setup tương ứng với OS.
+
+---
+
+## 📋 TÓM TẮT NHANH CHO AGENT
+
+### Nếu Windows native:
+1. Check Python → check Chrome → cài dep → `fix-error.py all` → đăng nhập → smoke test
+
+### Nếu Linux native:
+1. Check python3 → check Chrome → cài dep → nohup mở 4 profile → đăng nhập → smoke test
+
+### Nếu WSL:
+1. **Move skill sang `C:\agent-super-search\`**
+2. Tìm Windows Python path
+3. Cài dep bằng Windows Python
+4. `fix-error.py all` bằng Windows Python
+5. Đăng nhập từng profile (cửa sổ Chrome Windows)
+6. Smoke test bằng Windows Python
+7. **Tạo redirect SKILL.md trong WSL**
+8. Từ giờ dùng `C:\agent-super-search\SKILL.md`
+
+---
+
+## ⚠️ LƯU Ý QUAN TRỌNG
+
+1. **WSL = không có GUI** — tuyệt đối không chạy Python của WSL cho skill này
+2. **Linux = dùng nohup** — `fix-error.py` sẽ bị kill browser trên Linux
+3. **Profile bundling** — profiles/output nằm cùng thư mục skill, không hard-code path
+4. **Không tự chạy fix** — chỉ chạy `fix-error.py` khi user đồng ý
+5. **GitHub** — không đẩy `profiles/`, `output/`, `__pycache__/` lên repo
+
+---
+
+## 📦 LƯU Ý GITHUB
 
 Có thể đẩy folder skill lên GitHub, nhưng không nên đẩy:
 - `profiles/`
@@ -278,15 +315,3 @@ Có thể đẩy folder skill lên GitHub, nhưng không nên đẩy:
 - `__pycache__/`
 
 `.gitignore` đã chặn các thư mục này.
-
-## Tóm Tắt Ngắn Cho Agent
-
-Nếu máy mới:
-1. check GUI
-2. check Python
-3. check Chrome/Chromium
-4. cài dependency
-5. chạy `fix-error.py all`
-6. đăng nhập từng profile
-7. chạy smoke test
-8. sau đó mới dùng skill bình thường
