@@ -63,35 +63,42 @@ python3 manager.py "query của bạn" 0
 ### WSL (Windows Subsystem for Linux)
 
 **⚠️ QUAN TRỌNG:** Skill này đã được move sang Windows tại `C:\agent-super-search\`.
-Mọi lệnh Python phải chạy qua Windows Python, không dùng python3 của WSL.
+Mọi lệnh phải chạy qua **PowerShell** (hoặc **CMD**) của Windows, không chạy từ WSL bash.
 
 **Lần đầu sử dụng:** Đọc `readme-for-new-setup.md` để setup (move skill sang Windows, cài dep, tạo session).
 
-**Sử dụng hàng ngày (sau khi đã setup):**
+**Chạy manager.py (từ WSL, qua PowerShell):**
 
 ```bash
-# Python Windows đã được tìm và ghi lại trong quá trình setup
-# Ví dụ path (agent phải tự tìm và thay thế nếu khác):
-WIN_PYTHON="/mnt/c/Users/openclaw/AppData/Local/Programs/Python/Python313/python.exe"
+# Đường dẫn tuyệt đối (theo pattern runAdmin)
+POWERSHELL="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
 
-# Chạy manager (từ WSL, gọi Windows Python với path skill trên Windows):
-"$WIN_PYTHON" /mnt/c/agent-super-search/manager.py "query của bạn" 1
-"$WIN_PYTHON" /mnt/c/agent-super-search/manager.py "query của bạn" 0
+# Chạy với log chi tiết:
+$POWERSHELL -NoProfile -ExecutionPolicy Bypass -Command "Set-Location 'C:\agent-super-search'; python manager.py 'query của bạn' 1"
 
-# 1 = hiện log chi tiết, 0 = im lặng, chỉ in kết quả cuối
+# Chạy im lặng:
+$POWERSHELL -NoProfile -ExecutionPolicy Bypass -Command "Set-Location 'C:\agent-super-search'; python manager.py 'query của bạn' 0"
 ```
 
-**Sửa login/captcha:**
+> ❗ **Tại sao dùng PowerShell:** Query trong `'single quotes'` của PowerShell không bị parse sai dù có dấu ngoặc đơn `( )`. Đồng thời `Set-Location` đảm bảo Python thấy Windows path `C:\agent-super-search\...` → Chrome nhận đúng path. Tránh được cả 2 lỗi: cmd.exe escaping và WSL path `/mnt/c/...`.
+
+**Sửa login/captcha (từ WSL, qua PowerShell hoặc CMD):**
 
 ```bash
-"$WIN_PYTHON" /mnt/c/agent-super-search/fix-error.py chatgpt
+# Qua PowerShell:
+$POWERSHELL -NoProfile -ExecutionPolicy Bypass -Command "Set-Location 'C:\agent-super-search'; python fix-error.py chatgpt"
 # hoặc: gemini, deepseek, qwen, all
+
+# Qua CMD (nếu cần):
+/mnt/c/Windows/System32/cmd.exe /c "cd /d C:\agent-super-search && python fix-error.py chatgpt"
 ```
 
 **💡 GHI CHÚ CHO AGENT:**
-- Tất cả file Python nằm trong `C:\agent-super-search\` (truy cập từ WSL qua `/mnt/c/agent-super-search/`)
-- `profiles/` và `output/` nằm trong `C:\agent-super-search\` trên Windows
-- Đọc kết quả từ `/mnt/c/agent-super-search/output/result_<timestamp>.txt`
+- **Chạy manager.py:** Dùng PowerShell từ WSL như trên — query trong `'single quotes'`, không bị lỗi escaping
+- **Đọc kết quả:** `cat /mnt/c/agent-super-search/output/result_*.txt` (WSL bash đọc file Windows bình thường)
+- **Sửa login:** PowerShell hoặc CMD, luôn `Set-Location` / `cd /d` tới `C:\agent-super-search` để Chrome nhận đúng path
+- **Không chạy trực tiếp python từ WSL bash** — sẽ gặp lỗi WSL path `/mnt/c/...` và cmd.exe escaping `( )`
+- Tất cả file nằm trong `C:\agent-super-search\` (truy cập từ WSL qua `/mnt/c/agent-super-search/`)
 - Nếu chưa setup, đọc `readme-for-new-setup.md` trước
 
 ---
@@ -123,29 +130,12 @@ nohup google-chrome --user-data-dir="$PWD/profiles/qwen" --profile-directory=Def
 
 ### WSL
 
-**⚠️ QUAN TRỌNG:** Sau khi WSL setup, dùng `"$WIN_PYTHON" /mnt/c/agent-super-search/fix-error.py` là cách chính (xem mục CHẠY THEO NỀN TẢNG ở trên). `fix-error.py` chạy qua Windows Python sẽ tự mở Chrome với đúng profile trong `C:\agent-super-search\profiles\`.
-
-Nếu cần mở Chrome thủ công (fallback khi fix-error.py không hoạt động):
-
-**Cách 1: Mở Chrome Windows trực tiếp**
 ```bash
-# Mở 1 worker cụ thể:
-/mnt/c/Program\ Files/Google/Chrome/Application/chrome.exe --user-data-dir="C:\agent-super-search\profiles\chatgpt" --profile-directory=Default --no-first-run https://chatgpt.com/
-
-# Hoặc tìm Chrome path:
-ls /mnt/c/Program\ Files/Google/Chrome/Application/
-ls /mnt/c/Users/*/AppData/Local/Google/Chrome/Application/
+# Dùng PowerShell từ WSL (không chạy trực tiếp python WSL bash):
+POWERSHELL="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+$POWERSHELL -NoProfile -ExecutionPolicy Bypass -Command "Set-Location 'C:\agent-super-search'; python fix-error.py chatgpt"
+# hoặc: gemini, deepseek, qwen, all
 ```
-
-**Cách 2: Qua cmd.exe (nếu Chrome có trong PATH)**
-```bash
-/mnt/c/Windows/System32/cmd.exe /c "start chrome --user-data-dir=C:\agent-super-search\profiles\chatgpt https://chatgpt.com/"
-```
-
-**💡 GHI CHÚ CHO AGENT:**
-- **Lần đầu:** Tìm Chrome path bằng lệnh `ls` trên, test thành công → **GHI LẠI path vào đây**
-- **Ví dụ:** `# Máy này Chrome ở: /mnt/c/Program Files/Google/Chrome/Application/chrome.exe`
-- **Path profile:** Luôn dùng `C:\agent-super-search\profiles\` (truy cập từ WSL qua `/mnt/c/agent-super-search/profiles/`)
 
 ### Quy tắc fix
 

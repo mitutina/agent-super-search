@@ -148,6 +148,9 @@ SKILL_SRC="/home/openclaw/.openclaw/workspace-mark6-code/skill/agent-super-searc
 # Copy sang Windows qua /mnt/c
 cp -r "$SKILL_SRC" /mnt/c/agent-super-search
 
+# Fix permission cho Windows Python đọc được file
+/mnt/c/Windows/System32/cmd.exe /c "icacls C:\agent-super-search\* /grant Everyone:F /T" 2>/dev/null
+
 # Verify
 ls /mnt/c/agent-super-search/manager.py && echo "✅ Move thành công" || echo "❌ Move thất bại"
 ```
@@ -182,22 +185,24 @@ Nếu chưa có Python trên Windows, cài đặt:
 WIN_PYTHON="/mnt/c/Users/openclaw/AppData/Local/Programs/Python/Python313/python.exe"
 
 "$WIN_PYTHON" -m pip install -U pip
-"$WIN_PYTHON" -m pip install -r /mnt/c/agent-super-search/requirements.txt
+"$WIN_PYTHON" -m pip install -r /mnt/c/agent-super-search/requirements.txt || "$WIN_PYTHON" -m pip install playwright
 "$WIN_PYTHON" -m playwright install chromium
 ```
 
-### Bước 4: Tạo session lần đầu (chạy trên Windows)
+### Bước 4: Tạo session lần đầu (qua PowerShell)
 
 ```bash
-"$WIN_PYTHON" /mnt/c/agent-super-search/fix-error.py all
+# Dùng PowerShell để Chrome nhận đúng Windows path (không chạy trực tiếp python từ WSL bash)
+/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Set-Location 'C:\agent-super-search'; python fix-error.py all"
 ```
 
 4 cửa sổ Chrome Windows sẽ mở ra. **User phải tự đăng nhập** vào từng cửa sổ, xong thì đóng lại.
 
-### Bước 5: Smoke test (chạy bằng Windows Python)
+### Bước 5: Smoke test (qua PowerShell)
 
 ```bash
-"$WIN_PYTHON" /mnt/c/agent-super-search/manager.py "test" 1
+# Dùng PowerShell (tránh lỗi cmd.exe parse sai query có dấu ngoặc đơn)
+/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Set-Location 'C:\agent-super-search'; python manager.py 'test' 1"
 ```
 
 ### Bước 6: Tạo redirect SKILL.md và dọn dẹp WSL
@@ -218,10 +223,11 @@ Skill đã sẵn sàng. Từ giờ agent dùng `/mnt/c/agent-super-search/SKILL.
 WSL chỉ còn 1 file `SKILL.md` redirect — khi agent mở skill trong WSL, sẽ đọc redirect và biết phải sang Windows.
 
 **Ghi chú cho agent sau setup:**
-- Mọi lệnh `manager.py`, `fix-error.py`, `search_*.py` phải chạy bằng Windows Python
-- Dùng pattern: `"$WIN_PYTHON" /mnt/c/agent-super-search/manager.py "query" 1`
+- Chạy manager.py qua PowerShell: `$POWERSHELL -NoProfile -ExecutionPolicy Bypass -Command "Set-Location 'C:\agent-super-search'; python manager.py 'query' 1"`
+- Chạy fix-error.py qua PowerShell: `$POWERSHELL -NoProfile -ExecutionPolicy Bypass -Command "Set-Location 'C:\agent-super-search'; python fix-error.py chatgpt"`
+- Đọc kết quả từ WSL bash: `cat /mnt/c/agent-super-search/output/result_*.txt`
 - `profiles/` và `output/` nằm trong `C:\agent-super-search\` trên Windows
-- Khi cần sửa login: `"$WIN_PYTHON" /mnt/c/agent-super-search/fix-error.py chatgpt`
+- Không chạy trực tiếp python từ WSL bash — Chrome không hiểu WSL path `/mnt/c/...`
 
 ---
 
@@ -248,10 +254,9 @@ python fix-error.py chatgpt    # hoặc: gemini, deepseek, qwen, all
 nohup google-chrome --user-data-dir="$PWD/profiles/chatgpt" --profile-directory=Default --no-first-run --start-maximized --disable-gpu https://chatgpt.com/ > /dev/null 2>&1 &
 ```
 
-### WSL (dùng Windows Python)
+### WSL (qua PowerShell — không chạy trực tiếp python WSL bash)
 ```bash
-WIN_PYTHON="/mnt/c/Users/openclaw/AppData/Local/Programs/Python/Python313/python.exe"
-"$WIN_PYTHON" /mnt/c/agent-super-search/fix-error.py chatgpt
+/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Set-Location 'C:\agent-super-search'; python fix-error.py chatgpt"
 # hoặc: gemini, deepseek, qwen, all
 ```
 
@@ -288,12 +293,12 @@ Nếu thiếu → quay lại làm bước setup tương ứng với OS.
 ### Nếu WSL:
 1. **Move skill sang `C:\agent-super-search\`**
 2. Tìm Windows Python path
-3. Cài dep bằng Windows Python
-4. `fix-error.py all` bằng Windows Python
+3. Cài dep bằng Windows Python (từ WSL bash, bước này không cần PowerShell)
+4. `fix-error.py all` qua PowerShell (để Chrome nhận đúng Windows path)
 5. Đăng nhập từng profile (cửa sổ Chrome Windows)
-6. Smoke test bằng Windows Python
+6. Smoke test qua PowerShell: `python manager.py 'test' 1`
 7. **Tạo redirect SKILL.md trong WSL**
-8. Từ giờ dùng `C:\agent-super-search\SKILL.md`
+8. Từ giờ chạy manager.py qua PowerShell, WSL bash chỉ để đọc output
 
 ---
 

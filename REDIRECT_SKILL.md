@@ -22,19 +22,19 @@ Từ WSL, truy cập qua:
 
 ## Chạy skill từ WSL
 
-Mọi lệnh Python phải chạy bằng **Windows Python** (không dùng `python3` của WSL):
+Mọi lệnh phải chạy qua **PowerShell** (không dùng WSL bash trực tiếp):
 
 ```bash
-# Python Windows path (tìm trong quá trình setup, đường dẫn sau chỉ là ví dụ):
-WIN_PYTHON="/mnt/c/Users/openclaw/AppData/Local/Programs/Python/Python313/python.exe"
+POWERSHELL="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
 
-# Chạy manager:
-"$WIN_PYTHON" /mnt/c/agent-super-search/manager.py "query" 1
+# Chạy manager (query trong 'single quotes' của PowerShell, không bị lỗi escaping):
+$POWERSHELL -NoProfile -ExecutionPolicy Bypass -Command "Set-Location 'C:\agent-super-search'; python manager.py 'query' 1"
 
 # Sửa login/captcha:
-"$WIN_PYTHON" /mnt/c/agent-super-search/fix-error.py chatgpt
+$POWERSHELL -NoProfile -ExecutionPolicy Bypass -Command "Set-Location 'C:\agent-super-search'; python fix-error.py chatgpt"
+# hoặc: gemini, deepseek, qwen, all
 
-# Đọc kết quả:
+# Đọc kết quả (từ WSL bash):
 cat /mnt/c/agent-super-search/output/result_*.txt
 ```
 
@@ -43,4 +43,5 @@ cat /mnt/c/agent-super-search/output/result_*.txt
 - `profiles/` và `output/` nằm trong `C:\agent-super-search\` trên Windows
 - Browser chạy trên desktop Windows (có GUI thật)
 - Không dùng `python3` của WSL cho skill này
-- Khi cần sửa login: mở Chrome Windows với đúng profile trong `C:\agent-super-search\profiles\`
+- Không chạy trực tiếp python từ WSL bash — Chrome không hiểu WSL path `/mnt/c/...`
+- Query có dấu ngoặc đơn `( )` dùng `'single quotes'` trong PowerShell, không bị parse sai
